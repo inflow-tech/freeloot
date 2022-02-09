@@ -1,0 +1,56 @@
+steps:
+# generate
+- id: generate
+  name: 'gcr.io/nordic-gaming/contextcloud/ccb-cli'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    ccb generate --registry=gcr.io/$PROJECT_ID/inflow --tag=$REVISION_ID > ./.functions.yml
+  waitFor: ['-']
+
+# pack
+- id: pack
+  name: 'gcr.io/nordic-gaming/contextcloud/ccb-cli'
+  args: ['pack']
+  waitFor: ['-']
+
+# postgres
+- id: db
+  name: gcr.io/cloud-builders/docker
+  args: ['run', '-d', '-e', 'POSTGRES_USER=contextgg', '-e', 'POSTGRES_PASSWORD=mysecret', '--name=postgres', '--network=cloudbuild', 'postgres']
+  waitFor: ['-']
+
+- id: wait
+  name: jwilder/dockerize:0.6.1
+  args: ['dockerize', '-timeout=60s', '-wait=tcp://postgres:5432']
+  waitFor: ['db']
+
+# push
+- id: push
+  name: 'gcr.io/nordic-gaming/contextcloud/ccb-cli'
+  args: ['push', '--registry=gcr.io/$PROJECT_ID/inflow', '--tag=$REVISION_ID', '--build-args=DB_HOSTNAME=postgres', '--network=cloudbuild']
+  waitFor: ['pack', 'wait']
+
+# kill postgres
+- name: gcr.io/cloud-builders/docker
+  args: ['rm', '--force', 'postgres']
+  waitFor: ['push']
+
+# # deploy secrets
+# - name: 'gcr.io/cloud-builders/kubectl'
+#   args: ['apply', '-f', '/workspace/secrets-assets.yml']
+#   env:
+#   - 'CLOUDSDK_COMPUTE_ZONE=us-central1-c'
+#   - 'CLOUDSDK_CONTAINER_CLUSTER=war-factory'
+#   waitFor: ['generate', 'push']
+
+# deploy
+- name: 'gcr.io/cloud-builders/kubectl'
+  args: ['-n', 'inflow', 'apply', '-f', '/workspace/.functions.yml']
+  env:
+  - 'CLOUDSDK_COMPUTE_ZONE=us-central1-c'
+  - 'CLOUDSDK_CONTAINER_CLUSTER=war-factory'
+  waitFor: ['generate', 'push']
+
+timeout: 1800s
